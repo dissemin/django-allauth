@@ -6,6 +6,10 @@ from django.dispatch import Signal
 # accounts to an account.
 pre_social_login = Signal(providing_args=["request", "sociallogin"])
 
+# Sent after a social login is processed. This signal is emitted
+# just before redirecting to the next page.
+post_social_login = Signal(providing_args=["request", "sociallogin"])
+
 # Sent after a user connects a social account to a their local account.
 social_account_added = Signal(providing_args=["request", "sociallogin"])
 

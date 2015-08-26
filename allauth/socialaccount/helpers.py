@@ -137,13 +137,20 @@ def complete_social_login(request, sociallogin):
     except ImmediateHttpResponse as e:
         return e.response
     process = sociallogin.state.get('process')
+    resp = None
     if process == AuthProcess.REDIRECT:
-        return _social_login_redirect(request, sociallogin)
+        resp =  _social_login_redirect(request, sociallogin)
     elif process == AuthProcess.CONNECT:
-        return _add_social_account(request, sociallogin)
+        resp =  _add_social_account(request, sociallogin)
     else:
-        return _complete_social_login(request, sociallogin)
-
+        resp = _complete_social_login(request, sociallogin)
+    try:
+        signals.post_social_login.send(sender=SocialLogin,
+                request=request,
+                sociallogin=sociallogin)
+    except ImmediateHttpResponse as e:
+        return e.response
+    return resp
 
 def _social_login_redirect(request, sociallogin):
     next_url = sociallogin.get_redirect_url(request) or '/'
