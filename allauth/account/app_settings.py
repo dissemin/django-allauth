@@ -183,6 +183,10 @@ class AppSettings(object):
         return self._setting('CONFIRM_EMAIL_ON_GET', False)
 
     @property
+    def AUTHENTICATED_LOGIN_REDIRECTS(self):
+        return self._setting('AUTHENTICATED_LOGIN_REDIRECTS', True)
+
+    @property
     def LOGIN_ON_EMAIL_CONFIRMATION(self):
         """
         Automatically log the user in once they confirmed their email address
@@ -192,7 +196,8 @@ class AppSettings(object):
     @property
     def LOGIN_ON_PASSWORD_RESET(self):
         """
-        Automatically log the user in immediately after resetting their password.
+        Automatically log the user in immediately after resetting
+        their password.
         """
         return self._setting('LOGIN_ON_PASSWORD_RESET', False)
 
@@ -219,10 +224,10 @@ class AppSettings(object):
     @property
     def SESSION_COOKIE_AGE(self):
         """
-        Remembered sessions expire after this many seconds.
-        Defaults to 1814400 seconds which is 3 weeks.
+        Deprecated -- use Django's settings.SESSION_COOKIE_AGE instead
         """
-        return self._setting('SESSION_COOKIE_AGE', 60 * 60 * 24 * 7 * 3)
+        from django.conf import settings
+        return self._setting('SESSION_COOKIE_AGE', settings.SESSION_COOKIE_AGE)
 
     @property
     def SESSION_REMEMBER(self):
@@ -234,9 +239,33 @@ class AppSettings(object):
         return self._setting('SESSION_REMEMBER', None)
 
     @property
+    def TEMPLATE_EXTENSION(self):
+        """
+        A string defining the template extension to use, defaults to `html`.
+        """
+        return self._setting('TEMPLATE_EXTENSION', 'html')
+
+    @property
     def FORMS(self):
         return self._setting('FORMS', {})
 
+    @property
+    def LOGIN_ATTEMPTS_LIMIT(self):
+        """
+        Number of failed login attempts. When this number is
+        exceeded, the user is prohibited from logging in for the
+        specified `LOGIN_ATTEMPTS_TIMEOUT`
+        """
+        return self._setting('LOGIN_ATTEMPTS_LIMIT', 5)
+
+    @property
+    def LOGIN_ATTEMPTS_TIMEOUT(self):
+        """
+        Time period from last unsuccessful login attempt, during
+        which the user is prohibited from trying to log in.  Defaults to
+        5 minutes.
+        """
+        return self._setting('LOGIN_ATTEMPTS_TIMEOUT', 60 * 5)
 
 # Ugly? Guido recommends this himself ...
 # http://mail.python.org/pipermail/python-ideas/2012-May/014969.html

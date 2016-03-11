@@ -6,8 +6,7 @@ from django import forms
 from django.core.urlresolvers import reverse
 from django.core import exceptions
 from django.utils.translation import pgettext, ugettext_lazy as _, ugettext
-
-from django.contrib.auth import authenticate
+from django.core import validators
 from django.contrib.auth.tokens import default_token_generator
 
 from ..utils import (email_address_exists,
@@ -71,6 +70,7 @@ class LoginForm(forms.Form):
     }
 
     def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop('request', None)
         super(LoginForm, self).__init__(*args, **kwargs)
         if app_settings.AUTHENTICATION_METHOD == AuthenticationMethod.EMAIL:
             login_widget = forms.TextInput(attrs={'type': 'email',
@@ -126,9 +126,13 @@ class LoginForm(forms.Form):
         return login.strip()
 
     def clean(self):
+        super(LoginForm, self).clean()
         if self._errors:
             return
-        user = authenticate(**self.user_credentials())
+        credentials = self.user_credentials()
+        user = get_adapter(self.request).authenticate(
+            self.request,
+            **credentials)
         if user:
             self.user = user
         else:
@@ -205,7 +209,6 @@ def _base_signup_form_class():
 
 class BaseSignupForm(_base_signup_form_class()):
     username = forms.CharField(label=_("Username"),
-                               max_length=get_username_max_length(),
                                min_length=app_settings.USERNAME_MIN_LENGTH,
                                widget=forms.TextInput(
                                    attrs={'placeholder':
@@ -221,6 +224,11 @@ class BaseSignupForm(_base_signup_form_class()):
         self.username_required = kwargs.pop('username_required',
                                             app_settings.USERNAME_REQUIRED)
         super(BaseSignupForm, self).__init__(*args, **kwargs)
+        username_field = self.fields['username']
+        username_field.max_length = get_username_max_length()
+        username_field.validators.append(
+            validators.MaxLengthValidator(username_field.max_length))
+
         # field order may contain additional fields from our base class,
         # so take proper care when reordering...
         field_order = ['email', 'username']
@@ -302,7 +310,7 @@ class SignupForm(BaseSignupForm):
         return self.cleaned_data
 
     def save(self, request):
-        adapter = get_adapter()
+        adapter = get_adapter(request)
         user = adapter.new_user(request)
         adapter.save_user(request, user, self)
         self.custom_signup(request, user)
@@ -320,10 +328,13 @@ class UserForm(forms.Form):
 
 class AddEmailForm(UserForm):
 
-    email = forms.EmailField(label=_("E-mail"),
-                             required=True,
-                             widget=forms.TextInput(attrs={"type": "email",
-                                                           "size": "30"}))
+    email = forms.EmailField(
+        label=_("E-mail"),
+        required=True,
+        widget=forms.TextInput(
+            attrs={"type": "email",
+                   "size": "30",
+                   "placeholder": _('E-mail address')}))
 
     def clean_email(self):
         value = self.cleaned_data["email"]
@@ -399,7 +410,12 @@ class ResetPasswordForm(forms.Form):
     email = forms.EmailField(
         label=_("E-mail"),
         required=True,
-        widget=forms.TextInput(attrs={"type": "email", "size": "30"}))
+        widget=forms.TextInput(attrs={
+            "type": "email",
+            "size": "30",
+            "placeholder": _("E-mail address"),
+            })
+        )
 
     def clean_email(self):
         email = self.cleaned_data["email"]
@@ -411,10 +427,15 @@ class ResetPasswordForm(forms.Form):
         return self.cleaned_data["email"]
 
     def save(self, request, **kwargs):
-
+        current_site = get_current_site(request)
         email = self.cleaned_data["email"]
         token_generator = kwargs.get("token_generator",
                                      default_token_generator)
+
+        def deprecated_site():
+            warnings.warn("Context variable `site` deprecated, use"
+                          "`current_site` instead", DeprecationWarning)
+            return current_site
 
         for user in self.users:
 
@@ -424,8 +445,6 @@ class ResetPasswordForm(forms.Form):
             # password_reset = PasswordReset(user=user, temp_key=temp_key)
             # password_reset.save()
 
-            current_site = get_current_site()
-
             # send the password reset email
             path = reverse("account_reset_password_from_key",
                            kwargs=dict(uidb36=user_pk_to_url_str(user),
@@ -433,15 +452,20 @@ class ResetPasswordForm(forms.Form):
             url = build_absolute_uri(
                 request, path,
                 protocol=app_settings.DEFAULT_HTTP_PROTOCOL)
-            context = {"site": current_site,
+
+            context = {"site": deprecated_site,
+                       "current_site": current_site,
                        "user": user,
-                       "password_reset_url": url}
+                       "password_reset_url": url,
+                       "request": request}
+
             if app_settings.AUTHENTICATION_METHOD \
                     != AuthenticationMethod.EMAIL:
                 context['username'] = user_username(user)
-            get_adapter().send_mail('account/email/password_reset_key',
-                                    email,
-                                    context)
+            get_adapter(request).send_mail(
+                'account/email/password_reset_key',
+                email,
+                context)
         return self.cleaned_data["email"]
 
 

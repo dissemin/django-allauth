@@ -5,9 +5,7 @@ except ImportError:
     from datetime import datetime
     now = datetime.now
 
-import django
 from django.contrib import messages
-from django.core.urlresolvers import reverse
 from django.db import models
 from django.conf import settings
 from django.http import HttpResponseRedirect
@@ -16,10 +14,12 @@ from django.utils.http import urlencode
 from django.utils.http import int_to_base36, base36_to_int
 from django.core.exceptions import ValidationError
 
-if django.VERSION > (1, 8,):
-    from collections import OrderedDict
-else:
-    from django.utils.datastructures import SortedDict as OrderedDict
+from allauth.compat import OrderedDict
+
+try:
+    from django.contrib.auth import update_session_auth_hash
+except ImportError:
+    update_session_auth_hash = None
 
 try:
     from django.utils.encoding import force_text
@@ -43,7 +43,7 @@ def get_next_redirect_url(request, redirect_field_name="next"):
     via the request.
     """
     redirect_to = get_request_param(request, redirect_field_name)
-    if not get_adapter().is_safe_url(redirect_to):
+    if not get_adapter(request).is_safe_url(redirect_to):
         redirect_to = None
     return redirect_to
 
@@ -57,10 +57,19 @@ def get_login_redirect_url(request, url=None, redirect_field_name="next"):
         = (url
            or get_next_redirect_url(request,
                                     redirect_field_name=redirect_field_name)
-           or get_adapter().get_login_redirect_url(request))
+           or get_adapter(request).get_login_redirect_url(request))
     return redirect_url
 
 _user_display_callable = None
+
+
+def logout_on_password_change(request, user):
+    # Since it is the default behavior of Django to invalidate all sessions on
+    # password change, this function actually has to preserve the session when
+    # logout isn't desired.
+    if (update_session_auth_hash is not None and
+            not app_settings.LOGOUT_ON_PASSWORD_CHANGE):
+        update_session_auth_hash(request, user)
 
 
 def default_user_display(user):
@@ -118,8 +127,9 @@ def perform_login(request, user, email_verification,
     # is_active, yet, adapter methods could toy with is_active in a
     # `user_signed_up` signal. Furthermore, social users should be
     # stopped anyway.
+    adapter = get_adapter(request)
     if not user.is_active:
-        return HttpResponseRedirect(reverse('account_inactive'))
+        return adapter.respond_user_inactive(request, user)
 
     from .models import EmailAddress
     has_verified_email = EmailAddress.objects.filter(user=user,
@@ -133,10 +143,10 @@ def perform_login(request, user, email_verification,
     elif email_verification == EmailVerificationMethod.MANDATORY:
         if not has_verified_email:
             send_email_confirmation(request, user, signup=signup)
-            return HttpResponseRedirect(
-                reverse('account_email_verification_sent'))
+            return adapter.respond_email_verification_sent(
+                request, user)
     try:
-        get_adapter().login(request, user)
+        adapter.login(request, user)
         response = HttpResponseRedirect(
             get_login_redirect_url(request, redirect_url))
 
@@ -147,10 +157,11 @@ def perform_login(request, user, email_verification,
                                     response=response,
                                     user=user,
                                     **signal_kwargs)
-        get_adapter().add_message(request,
-                                  messages.SUCCESS,
-                                  'account/messages/logged_in.txt',
-                                  {'user': user})
+        adapter.add_message(
+            request,
+            messages.SUCCESS,
+            'account/messages/logged_in.txt',
+            {'user': user})
     except ImmediateHttpResponse as e:
         response = e.response
     return response
@@ -180,7 +191,7 @@ def cleanup_email_addresses(request, addresses):
     exist, the first one encountered will be kept as primary.
     """
     from .models import EmailAddress
-    adapter = get_adapter()
+    adapter = get_adapter(request)
     # Let's group by `email`
     e2a = OrderedDict()  # maps email to EmailAddress
     primary_addresses = []
@@ -244,7 +255,7 @@ def setup_user_email(request, user, addresses):
     assert EmailAddress.objects.filter(user=user).count() == 0
     priority_addresses = []
     # Is there a stashed e-mail?
-    adapter = get_adapter()
+    adapter = get_adapter(request)
     stashed_email = adapter.unstash_verified_email(request)
     if stashed_email:
         priority_addresses.append(EmailAddress(user=user,
@@ -310,13 +321,14 @@ def send_email_confirmation(request, user, signup=False):
             assert email_address
         # At this point, if we were supposed to send an email we have sent it.
         if send_email:
-            get_adapter().add_message(request,
-                                      messages.INFO,
-                                      'account/messages/'
-                                      'email_confirmation_sent.txt',
-                                      {'email': email})
+            get_adapter(request).add_message(
+                request,
+                messages.INFO,
+                'account/messages/'
+                'email_confirmation_sent.txt',
+                {'email': email})
     if signup:
-        request.session['account_user'] = user_pk_to_url_str(user)
+        get_adapter(request).stash_user(request, user_pk_to_url_str(user))
 
 
 def sync_user_email_addresses(user):
@@ -373,6 +385,8 @@ def user_pk_to_url_str(user):
     User = get_user_model()
     if (hasattr(models, 'UUIDField')
             and issubclass(type(User._meta.pk), models.UUIDField)):
+        if isinstance(user.pk, six.string_types):
+            return user.pk
         return user.pk.hex
 
     ret = user.pk
@@ -385,11 +399,15 @@ def url_str_to_user_pk(s):
     User = get_user_model()
     # TODO: Ugh, isn't there a cleaner way to determine whether or not
     # the PK is a str-like field?
+    if getattr(User._meta.pk, 'rel', None):
+        pk_field = User._meta.pk.rel.to._meta.pk
+    else:
+        pk_field = User._meta.pk
     if (hasattr(models, 'UUIDField')
-            and issubclass(type(User._meta.pk), models.UUIDField)):
+            and issubclass(type(pk_field), models.UUIDField)):
         return s
     try:
-        User._meta.pk.to_python('a')
+        pk_field.to_python('a')
         pk = s
     except ValidationError:
         pk = base36_to_int(s)
