@@ -4,6 +4,7 @@ import json
 import re
 import time
 import warnings
+import hashlib
 
 from django import forms
 from django.conf import settings
@@ -372,8 +373,7 @@ class DefaultAccountAdapter(object):
             args=[emailconfirmation.key])
         ret = build_absolute_uri(
             request,
-            url,
-            protocol=app_settings.DEFAULT_HTTP_PROTOCOL)
+            url)
         return ret
 
     def send_confirmation_mail(self, request, emailconfirmation, signup):
@@ -405,10 +405,11 @@ class DefaultAccountAdapter(object):
 
     def _get_login_attempts_cache_key(self, request, **credentials):
         site = get_current_site(request)
-        login = credentials.get('email', credentials.get('username'))
+        login = credentials.get('email', credentials.get('username', ''))
+        login_key = hashlib.sha256(login.encode('utf8')).hexdigest()
         return 'allauth/login_attempts@{site_id}:{login}'.format(
             site_id=site.pk,
-            login=login)
+            login=login_key)
 
     def pre_authenticate(self, request, **credentials):
         if app_settings.LOGIN_ATTEMPTS_LIMIT:

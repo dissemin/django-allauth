@@ -12,6 +12,7 @@ from django.test.client import RequestFactory
 from django.contrib.messages.middleware import MessageMiddleware
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.sites.models import Site
 from django.conf import settings
 
 from ..tests import MockedResponse, mocked_response, TestCase
@@ -35,11 +36,12 @@ class OAuthTestsMixin(object):
     def setUp(self):
         super(OAuthTestsMixin, self).setUp()
         self.provider = providers.registry.by_id(self.provider_id)
-        app = SocialApp.objects.create(provider=self.provider.id,
-                                       name=self.provider.id,
-                                       client_id='app123id',
-                                       key=self.provider.id,
-                                       secret='dummy')
+        app = SocialApp.objects.create(
+            provider=self.provider.id,
+            name=self.provider.id,
+            client_id='app123id',
+            key=self.provider.id,
+            secret='dummy')
         app.sites.add(get_current_site())
 
     @override_settings(SOCIALACCOUNT_AUTO_SIGNUP=False)
@@ -61,8 +63,17 @@ class OAuthTestsMixin(object):
                              fetch_redirect_response=False)
         user = resp.context['user']
         self.assertFalse(user.has_usable_password())
-        return SocialAccount.objects.get(user=user,
-                                         provider=self.provider.id)
+        account = SocialAccount.objects.get(
+            user=user,
+            provider=self.provider.id)
+        # The following lines don't actually test that much, but at least
+        # we make sure that the code is hit.
+        provider_account = account.get_provider_account()
+        provider_account.get_avatar_url()
+        provider_account.get_profile_url()
+        provider_account.get_brand()
+        provider_account.to_str()
+        return account
 
     @override_settings(SOCIALACCOUNT_AUTO_SIGNUP=True,
                        SOCIALACCOUNT_EMAIL_REQUIRED=False,
@@ -104,8 +115,10 @@ class OAuthTestsMixin(object):
 
     def test_authentication_error(self):
         resp = self.client.get(reverse(self.provider.id + '_callback'))
-        self.assertTemplateUsed(resp,
-                                'socialaccount/authentication_error.%s' % getattr(settings, 'ACCOUNT_TEMPLATE_EXTENSION', 'html'))
+        self.assertTemplateUsed(
+            resp,
+            'socialaccount/authentication_error.%s' % getattr(
+                settings, 'ACCOUNT_TEMPLATE_EXTENSION', 'html'))
 
 
 # For backward-compatibility with third-party provider tests that call
@@ -175,6 +188,13 @@ class OAuth2TestsMixin(object):
         # get account
         sa = SocialAccount.objects.filter(user=user,
                                           provider=self.provider.id).get()
+        # The following lines don't actually test that much, but at least
+        # we make sure that the code is hit.
+        provider_account = sa.get_provider_account()
+        provider_account.get_avatar_url()
+        provider_account.get_profile_url()
+        provider_account.get_brand()
+        provider_account.to_str()
         # get token
         t = sa.socialtoken_set.get()
         # verify access_token and refresh_token
@@ -218,7 +238,8 @@ class OAuth2TestsMixin(object):
         resp = self.client.get(reverse(self.provider.id + '_callback'))
         self.assertTemplateUsed(
             resp,
-            'socialaccount/authentication_error.%s' % getattr(settings, 'ACCOUNT_TEMPLATE_EXTENSION', 'html'))
+            'socialaccount/authentication_error.%s' % getattr(
+                settings, 'ACCOUNT_TEMPLATE_EXTENSION', 'html'))
 
 
 # For backward-compatibility with third-party provider tests that call
@@ -231,6 +252,17 @@ def create_oauth2_tests(provider):
 
 
 class SocialAccountTests(TestCase):
+
+    def setUp(self):
+        site = Site.objects.get_current()
+        for provider in providers.registry.get_list():
+            app = SocialApp.objects.create(
+                provider=provider.id,
+                name=provider.id,
+                client_id='app123id',
+                key='123',
+                secret='dummy')
+            app.sites.add(site)
 
     @override_settings(
         SOCIALACCOUNT_AUTO_SIGNUP=True,
@@ -387,3 +419,28 @@ class SocialAccountTests(TestCase):
         MessageMiddleware().process_request(request)
         resp = complete_social_login(request, sociallogin)
         return request, resp
+
+    def test_disconnect(self):
+        User = get_user_model()
+        # Some existig user
+        user = User()
+        user_username(user, 'test')
+        user_email(user, 'test@test.com')
+        user.set_password('test')
+        user.save()
+
+        account = SocialAccount.objects.create(
+            uid='123',
+            provider='twitter',
+            user=user)
+
+        self.client.login(
+            username=user.username,
+            password=user.username)
+        resp = self.client.get(reverse('socialaccount_connections'))
+        self.assertTemplateUsed(resp, 'socialaccount/connections.html')
+        resp = self.client.post(
+            reverse('socialaccount_connections'),
+            {'account': account.pk})
+        self.assertFalse(
+            SocialAccount.objects.filter(pk=account.pk).exists())

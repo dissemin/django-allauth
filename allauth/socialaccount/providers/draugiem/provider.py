@@ -3,7 +3,6 @@ from django.utils.http import urlencode
 
 from allauth.socialaccount import providers
 from allauth.socialaccount.providers.base import Provider, ProviderAccount
-from allauth.socialaccount import app_settings
 
 
 class DraugiemAccount(ProviderAccount):
@@ -39,7 +38,6 @@ class DraugiemAccount(ProviderAccount):
 class DraugiemProvider(Provider):
     id = 'draugiem'
     name = 'Draugiem'
-    package = 'allauth.socialaccount.providers.draugiem'
     account_class = DraugiemAccount
 
     def get_login_url(self, request, **kwargs):
